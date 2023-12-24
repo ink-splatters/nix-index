@@ -1,65 +1,90 @@
 {
   description = "A files database for nixpkgs";
-
+ 
   inputs = {
-    nixpkgs.url = "nixpkgs/nixos-unstable";
-    flake-compat = {
-      url = "github:edolstra/flake-compat";
-      flake = false;
+    nixpkgs.url = "nixpkgs/nixpkgs-unstable";
+
+    flake-utils = {
+      url = "github:numtide/flake-utils";
+      inputs.systems.follows = "systems";
     };
+
+    pre-commit-hooks={
+      url = "github:cachix/pre-commit-hooks.nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.nixpkgs-stable.follows = "nixpkgs";
+    };
+    
+    # [ "x86_64-linux" "x86_64-darwin" "aarch64-linux" "aarch64-darwin" ]
+    systems.url = "github:nix-systems/default";
   };
 
-  outputs = { self, nixpkgs, flake-compat }:
+  nixConfig = {
+    extra-substituters = "https://nix-community.cachix.org https://pre-commit-hooks.cachix.org https://aarch64-darwin.cachix.org";
+    extra-trusted-public-keys = "nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs= pre-commit-hooks.cachix.org-1:Pkk3Panw5AW24TOv6kz3PvLhlH8puAsJTBbOPmBo7Rc= aarch64-darwin.cachix.org-1:mEz8A1jcJveehs/ZbZUEjXZ65Aukk9bg2kmb0zL9XDA=";
+  };
+
+
+  outputs = { self,  nixpkgs, flake-utils, ... }@inputs:
+    flake-utils.lib.eachDefaultSystem (system: 
     let
-      inherit (nixpkgs) lib;
-      systems = [ "x86_64-linux" "x86_64-darwin" "aarch64-darwin" "aarch64-linux" ];
-      forAllSystems = lib.genAttrs systems;
-      nixpkgsFor = nixpkgs.legacyPackages;
-    in
-    {
-      packages = forAllSystems (system: {
-        default = with nixpkgsFor.${system}; rustPlatform.buildRustPackage {
-          pname = "nix-index";
-          inherit ((lib.importTOML ./Cargo.toml).package) version;
+     inherit (nixpkgs) lib;
+      pkgs = nixpkgs.legacyPackages.${system};
 
-          src = lib.sourceByRegex self [
-            "(examples|src)(/.*)?"
-            ''Cargo\.(toml|lock)''
-            ''command-not-found\.sh''
-          ];
+      in 
+      with pkgs ; {
+        inherit system;
 
-          cargoLock = {
-            lockFile = ./Cargo.lock;
-          };
-
-          nativeBuildInputs = [ pkg-config ];
-          buildInputs = [ openssl curl sqlite ]
-            ++ lib.optionals stdenv.isDarwin [ darwin.apple_sdk.frameworks.Security ];
-
-          postInstall = ''
-            substituteInPlace command-not-found.sh \
-              --subst-var out
-            install -Dm555 command-not-found.sh -t $out/etc/profile.d
-          '';
-
-          meta = with lib; {
-            description = "A files database for nixpkgs";
-            homepage = "https://github.com/nix-community/nix-index";
-            license = with licenses; [ bsd3 ];
-            maintainers = [ maintainers.bennofs ];
-          };
+        pre-commit.hooks = {
+          nixpkgs-fmt.enable = true;
+          rustfmt.enable = true;
+          shellcheck.enable = true;
+          taplo.enable = true; # toml formatter
+          mdformat.enable = true;
+          yamllint.enable = true;
         };
-      });
+      
+      packages = {
+      pname = "nix-index";
+      inherit ((lib.importTOML ./Cargo.toml).package) version;
 
-      checks = forAllSystems (system:
-          let
+      src = lib.sourceByRegex self [
+        "(examples|src)(/.*)?"
+        ''Cargo\.(toml|lock)''
+        ''command-not-found\.sh''
+      ];
+
+      cargoLock = {
+        lockFile = ./Cargo.lock;
+      };
+
+      nativeBuildInputs = [ pkg-config ];
+      buildInputs = [ openssl curl sqlite ]
+        ++ lib.optionals stdenv.isDarwin [ darwin.apple_sdk.frameworks.Security ];
+
+      postInstall = ''
+        substituteInPlace command-not-found.sh \
+          --subst-var out
+        install -Dm555 command-not-found.sh -t $out/etc/profile.d
+      '';
+
+      meta = with lib; {
+        description = "A files database for nixpkgs";
+        homepage = "https://github.com/nix-community/nix-index";
+        license = with licenses; [ bsd3 ];
+        maintainers = [ maintainers.bennofs ];
+      };
+  };
+
+      checks = 
+      let
             packages = lib.mapAttrs' (n: lib.nameValuePair "package-${n}") self.packages.${system};
             devShells = lib.mapAttrs' (n: lib.nameValuePair "devShell-${n}") self.devShells.${system};
-          in packages // devShells
-      );
+      in packages // devShells;
+      
 
-      devShells = forAllSystems (system: {
-        minimal = with nixpkgsFor.${system}; mkShell {
+      devShells = {
+        minimal = mkShell {
           name = "nix-index";
 
           nativeBuildInputs = [
@@ -76,7 +101,7 @@
           env.LD_LIBRARY_PATH = lib.makeLibraryPath [ openssl ];
         };
 
-        default = with nixpkgsFor.${system}; mkShell {
+        default = mkShell {
           name = "nix-index";
 
           inputsFrom = [ self.devShells.${system}.minimal ];
@@ -87,10 +112,10 @@
             LD_LIBRARY_PATH = lib.makeLibraryPath [ openssl ];
             RUST_SRC_PATH = rustPlatform.rustLibSrc;
           };
-        };
-      });
+         };
+      };
 
-      apps = forAllSystems (system: {
+      apps = {
         nix-index = {
           type = "app";
           program = "${self.packages.${system}.default}/bin/nix-index";
@@ -100,6 +125,7 @@
           program = "${self.packages.${system}.default}/bin/nix-locate";
         };
         default = self.apps.${system}.nix-locate;
+      };
+
       });
-    };
-}
+}    
