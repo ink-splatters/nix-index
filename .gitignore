@@ -5,3 +5,4 @@ target
 .direnv/
 .envrc
 *.sqlite
+.pre-commit-config.yaml
